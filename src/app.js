@@ -1,12 +1,18 @@
 const express = require('express');
+const dotenv = require('dotenv');
 const cors = require('cors');
+
+dotenv.config();
+
 const { toNodeHandler } = require("better-auth/node");
 const { getAuth } = require('./lib/auth');
 
 const app = express();
 
+const frontend = process.env.FRONTEND_URL;
+
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: frontend || 'http://localhost:3000',
     credentials: true
 }));
 app.use(express.json());
