@@ -7,6 +7,7 @@ dotenv.config();
 const { toNodeHandler } = require("better-auth/node");
 const { getAuth } = require('./lib/auth');
 const branchRoutes = require('./routes/branch.route');
+const userRoutes = require('./routes/user.route');
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use("/api/auth", async (req, res) => {
 });
 
 app.use("/api/branches", branchRoutes);
+app.use("/api/users", userRoutes);
 
 app.get('/', (req, res) => {
     res.send('FreshMart POS Backend is running...');
