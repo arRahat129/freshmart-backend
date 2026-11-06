@@ -20,7 +20,9 @@ const createUser = async (req, res) => {
 
         let parsedBranchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
 
-        if (role === 'manager' && parsedBranchId) {
+        const assignedRole = role || 'employee';
+
+        if (assignedRole === 'manager' && parsedBranchId) {
             const branch = await db.collection('branches').findOne({ _id: parsedBranchId });
             if (branch && branch.manager) {
                 return res.status(400).json({ success: false, message: 'This branch already has a manager assigned.' });
@@ -31,7 +33,7 @@ const createUser = async (req, res) => {
             name,
             email,
             password,
-            role: role || 'employee',
+            role: assignedRole,
             phone: Array.isArray(phone) ? phone : [phone].filter(Boolean),
             address: address || '',
             image: image || '',
@@ -46,7 +48,7 @@ const createUser = async (req, res) => {
         const result = await db.collection('users').insertOne(newUser);
         const newUserId = result.insertedId;
 
-        if (role === 'manager' && parsedBranchId) {
+        if (assignedRole === 'manager' && parsedBranchId) {
             await db.collection('branches').updateOne(
                 { _id: parsedBranchId },
                 { $set: { manager: newUserId, updatedAt: new Date() } }
@@ -98,7 +100,17 @@ const updateUser = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid user ID format.' });
         }
 
+        const currentUser = await db.collection('users').findOne({ _id: new ObjectId(id) });
+        if (!currentUser) {
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
         const { name, email, password, phone, address, image, branchId, status, updatedBy } = req.body;
+
+        let parsedBranchId = currentUser.branchId;
+        if (branchId !== undefined) {
+            parsedBranchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
+        }
 
         const updates = { updatedAt: new Date() };
         if (name !== undefined) updates.name = name;
@@ -107,7 +119,7 @@ const updateUser = async (req, res) => {
         if (phone !== undefined) updates.phone = Array.isArray(phone) ? phone : [phone].filter(Boolean);
         if (address !== undefined) updates.address = address;
         if (image !== undefined) updates.image = image;
-        if (branchId !== undefined) updates.branchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
+        if (branchId !== undefined) updates.branchId = parsedBranchId;
         if (status !== undefined) updates.status = status;
         if (updatedBy !== undefined) updates.updatedBy = updatedBy;
 
@@ -118,8 +130,19 @@ const updateUser = async (req, res) => {
         );
 
         const updatedUser = result.value || result;
-        if (!updatedUser) {
-            return res.status(404).json({ success: false, message: 'User not found.' });
+
+        if (currentUser.role === 'manager' && (parsedBranchId === null || String(parsedBranchId) !== String(currentUser.branchId))) {
+            await db.collection('branches').updateMany(
+                { manager: new ObjectId(id) },
+                { $set: { manager: null, updatedAt: new Date() } }
+            );
+        }
+
+        if (currentUser.role === 'manager' && parsedBranchId && String(parsedBranchId) !== String(currentUser.branchId)) {
+            await db.collection('branches').updateOne(
+                { _id: parsedBranchId },
+                { $set: { manager: new ObjectId(id), updatedAt: new Date() } }
+            );
         }
 
         return res.status(200).json({ success: true, data: updatedUser });
@@ -137,6 +160,11 @@ const updateUserRole = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid user ID format.' });
         }
 
+        const currentUser = await db.collection('users').findOne({ _id: new ObjectId(id) });
+        if (!currentUser) {
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
         const { role, updatedBy } = req.body;
 
         const updates = {
@@ -152,8 +180,19 @@ const updateUserRole = async (req, res) => {
         );
 
         const updatedUser = result.value || result;
-        if (!updatedUser) {
-            return res.status(404).json({ success: false, message: 'User not found.' });
+
+        if (currentUser.role === 'manager' && role && role !== 'manager') {
+            await db.collection('branches').updateMany(
+                { manager: new ObjectId(id) },
+                { $set: { manager: null, updatedAt: new Date() } }
+            );
+        }
+
+        if (role === 'manager' && currentUser.branchId) {
+            await db.collection('branches').updateOne(
+                { _id: new ObjectId(currentUser.branchId) },
+                { $set: { manager: new ObjectId(id), updatedAt: new Date() } }
+            );
         }
 
         return res.status(200).json({ success: true, data: updatedUser });
@@ -186,12 +225,10 @@ const deleteUser = async (req, res) => {
         await db.collection('deleted_users').insertOne(deletedRecord);
         await db.collection('users').deleteOne({ _id: new ObjectId(id) });
 
-        if (userToDelete.branchId) {
-            await db.collection('branches').updateOne(
-                { _id: new ObjectId(userToDelete.branchId), manager: new ObjectId(id) },
-                { $set: { manager: null, updatedAt: new Date() } }
-            );
-        }
+        await db.collection('branches').updateMany(
+            { manager: new ObjectId(id) },
+            { $set: { manager: null, updatedAt: new Date() } }
+        );
 
         return res.status(200).json({ success: true, message: 'User deleted and archived successfully.' });
     } catch (error) {
