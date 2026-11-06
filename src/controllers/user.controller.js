@@ -18,6 +18,15 @@ const createUser = async (req, res) => {
             }
         }
 
+        let parsedBranchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
+
+        if (role === 'manager' && parsedBranchId) {
+            const branch = await db.collection('branches').findOne({ _id: parsedBranchId });
+            if (branch && branch.manager) {
+                return res.status(400).json({ success: false, message: 'This branch already has a manager assigned.' });
+            }
+        }
+
         const newUser = {
             name,
             email,
@@ -26,7 +35,7 @@ const createUser = async (req, res) => {
             phone: Array.isArray(phone) ? phone : [phone].filter(Boolean),
             address: address || '',
             image: image || '',
-            branchId: branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null,
+            branchId: parsedBranchId,
             employeeId: employeeId || '',
             status: 'Active',
             createdBy: createdBy || 'System',
@@ -35,7 +44,16 @@ const createUser = async (req, res) => {
         };
 
         const result = await db.collection('users').insertOne(newUser);
-        return res.status(201).json({ success: true, data: { _id: result.insertedId, ...newUser } });
+        const newUserId = result.insertedId;
+
+        if (role === 'manager' && parsedBranchId) {
+            await db.collection('branches').updateOne(
+                { _id: parsedBranchId },
+                { $set: { manager: newUserId, updatedAt: new Date() } }
+            );
+        }
+
+        return res.status(201).json({ success: true, data: { _id: newUserId, ...newUser } });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -167,6 +185,13 @@ const deleteUser = async (req, res) => {
 
         await db.collection('deleted_users').insertOne(deletedRecord);
         await db.collection('users').deleteOne({ _id: new ObjectId(id) });
+
+        if (userToDelete.branchId) {
+            await db.collection('branches').updateOne(
+                { _id: new ObjectId(userToDelete.branchId), manager: new ObjectId(id) },
+                { $set: { manager: null, updatedAt: new Date() } }
+            );
+        }
 
         return res.status(200).json({ success: true, message: 'User deleted and archived successfully.' });
     } catch (error) {
