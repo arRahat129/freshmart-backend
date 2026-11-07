@@ -47,8 +47,16 @@ function getAuth() {
                     required: false,
                     defaultValue: "active",
                 },
+                employeeId: {
+                    type: "string",
+                    required: false,
+                    defaultValue: "",
+                },
             },
         },
+        session: {
+            additionalFields: ["employeeId", "role"]
+        }
     });
 }
 
