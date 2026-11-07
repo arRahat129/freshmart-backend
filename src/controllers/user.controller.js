@@ -1,5 +1,7 @@
 const { ObjectId } = require('mongodb');
+const bcrypt = require('bcrypt');
 const { getDB } = require('../config/db');
+const { getAuth } = require('../lib/auth');
 
 const createUser = async (req, res) => {
     try {
@@ -19,7 +21,6 @@ const createUser = async (req, res) => {
         }
 
         let parsedBranchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
-
         const assignedRole = role || 'employee';
 
         if (assignedRole === 'manager' && parsedBranchId) {
@@ -29,10 +30,19 @@ const createUser = async (req, res) => {
             }
         }
 
-        const newUser = {
-            name,
-            email,
-            password,
+        const auth = getAuth();
+
+        const authResult = await auth.api.signUpEmail({
+            body: {
+                email,
+                password,
+                name: name || '',
+            }
+        });
+
+        const newUserId = new ObjectId(authResult.user.id);
+
+        const additionalFields = {
             role: assignedRole,
             phone: Array.isArray(phone) ? phone : [phone].filter(Boolean),
             address: address || '',
@@ -41,12 +51,15 @@ const createUser = async (req, res) => {
             employeeId: employeeId || '',
             status: 'Active',
             createdBy: createdBy || 'System',
-            createdAt: new Date(),
             updatedAt: new Date()
         };
 
-        const result = await db.collection('users').insertOne(newUser);
-        const newUserId = result.insertedId;
+        await db.collection('users').updateOne(
+            { _id: newUserId },
+            { $set: additionalFields }
+        );
+
+        const finalUser = await db.collection('users').findOne({ _id: newUserId });
 
         if (assignedRole === 'manager' && parsedBranchId) {
             await db.collection('branches').updateOne(
@@ -55,7 +68,9 @@ const createUser = async (req, res) => {
             );
         }
 
-        return res.status(201).json({ success: true, data: { _id: newUserId, ...newUser } });
+        const { password: _, ...userWithoutPassword } = finalUser;
+
+        return res.status(201).json({ success: true, data: userWithoutPassword });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -115,7 +130,12 @@ const updateUser = async (req, res) => {
         const updates = { updatedAt: new Date() };
         if (name !== undefined) updates.name = name;
         if (email !== undefined) updates.email = email;
-        if (password !== undefined) updates.password = password;
+
+        if (password !== undefined && password.trim() !== '') {
+            const saltRounds = 10;
+            updates.password = await bcrypt.hash(password, saltRounds);
+        }
+
         if (phone !== undefined) updates.phone = Array.isArray(phone) ? phone : [phone].filter(Boolean);
         if (address !== undefined) updates.address = address;
         if (image !== undefined) updates.image = image;

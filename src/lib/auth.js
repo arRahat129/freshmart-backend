@@ -17,6 +17,7 @@ function getAuth() {
             enabled: true,
         },
         user: {
+            modelName: "users",
             additionalFields: {
                 role: {
                     type: "string",
@@ -35,6 +36,11 @@ function getAuth() {
                 address: {
                     type: "string",
                     required: false,
+                },
+                image: {
+                    type: "string",
+                    required: false,
+                    defaultValue: "",
                 },
                 status: {
                     type: "string",
