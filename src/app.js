@@ -8,6 +8,8 @@ const { toNodeHandler } = require("better-auth/node");
 const { getAuth } = require('./lib/auth');
 const branchRoutes = require('./routes/branch.route');
 const userRoutes = require('./routes/user.route');
+const productRoutes = require('./routes/product.route');
+const categoryVariantRoutes = require('./routes/categoryVariant.route');
 
 const app = express();
 
@@ -26,6 +28,8 @@ app.use("/api/auth", async (req, res) => {
 
 app.use("/api/branches", branchRoutes);
 app.use("/api/users", userRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/catalog', categoryVariantRoutes);
 
 app.get('/', (req, res) => {
     res.send('FreshMart POS Backend is running...');
