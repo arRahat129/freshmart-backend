@@ -2,11 +2,28 @@ const { ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const { getDB } = require('../config/db');
 const { getAuth } = require('../lib/auth');
+const { canManage, assignableRoles } = require('../lib/roleHierarchy');
+
+function hierarchyGuard(res, actorRole, targetRole, context = 'manage') {
+    if (!canManage(actorRole, targetRole)) {
+        res.status(403).json({
+            success: false,
+            message: `Access denied. You cannot ${context} a user with role "${targetRole}".`
+        });
+        return true;
+    }
+    return false;
+}
 
 const createUser = async (req, res) => {
     try {
         const db = getDB();
+        const actorRole = req.sessionUser?.role;
         const { name, email, password, role, phone, address, image, branchId, employeeId, createdBy } = req.body;
+
+        const assignedRole = role || 'staff';
+
+        if (hierarchyGuard(res, actorRole, assignedRole, 'create')) return;
 
         const existingUser = await db.collection('users').findOne({ email });
         if (existingUser) {
@@ -21,7 +38,6 @@ const createUser = async (req, res) => {
         }
 
         let parsedBranchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
-        const assignedRole = role || 'employee';
 
         if (assignedRole === 'manager' && parsedBranchId) {
             const branch = await db.collection('branches').findOne({ _id: parsedBranchId });
@@ -33,11 +49,7 @@ const createUser = async (req, res) => {
         const auth = getAuth();
 
         const authResult = await auth.api.signUpEmail({
-            body: {
-                email,
-                password,
-                name: name || '',
-            }
+            body: { email, password, name: name || '' }
         });
 
         const newUserId = new ObjectId(authResult.user.id);
@@ -69,7 +81,6 @@ const createUser = async (req, res) => {
         }
 
         const { password: _, ...userWithoutPassword } = finalUser;
-
         return res.status(201).json({ success: true, data: userWithoutPassword });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
@@ -79,8 +90,10 @@ const createUser = async (req, res) => {
 const getAllUsers = async (req, res) => {
     try {
         const db = getDB();
+        const actorRole = req.sessionUser?.role;
+
         const users = await db.collection('users').find().toArray();
-        return res.status(200).json({ success: true, data: users });
+        return res.status(200).json({ success: true, data: users, actorRole });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -109,6 +122,7 @@ const getUserById = async (req, res) => {
 const updateUser = async (req, res) => {
     try {
         const db = getDB();
+        const actorRole = req.sessionUser?.role;
         const { id } = req.params;
 
         if (!ObjectId.isValid(id)) {
@@ -120,7 +134,13 @@ const updateUser = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found.' });
         }
 
-        const { name, email, password, phone, address, image, branchId, status, updatedBy } = req.body;
+        if (hierarchyGuard(res, actorRole, currentUser.role, 'update')) return;
+
+        const { name, email, password, phone, address, image, branchId, status, role, updatedBy } = req.body;
+
+        if (role !== undefined && role !== currentUser.role) {
+            if (hierarchyGuard(res, actorRole, role, 'assign the role')) return;
+        }
 
         let parsedBranchId = currentUser.branchId;
         if (branchId !== undefined) {
@@ -132,8 +152,7 @@ const updateUser = async (req, res) => {
         if (email !== undefined) updates.email = email;
 
         if (password !== undefined && password.trim() !== '') {
-            const saltRounds = 10;
-            updates.password = await bcrypt.hash(password, saltRounds);
+            updates.password = await bcrypt.hash(password, 10);
         }
 
         if (phone !== undefined) updates.phone = Array.isArray(phone) ? phone : [phone].filter(Boolean);
@@ -141,6 +160,7 @@ const updateUser = async (req, res) => {
         if (image !== undefined) updates.image = image;
         if (branchId !== undefined) updates.branchId = parsedBranchId;
         if (status !== undefined) updates.status = status;
+        if (role !== undefined) updates.role = role;
         if (updatedBy !== undefined) updates.updatedBy = updatedBy;
 
         const result = await db.collection('users').findOneAndUpdate(
@@ -151,14 +171,16 @@ const updateUser = async (req, res) => {
 
         const updatedUser = result.value || result;
 
-        if (currentUser.role === 'manager' && (parsedBranchId === null || String(parsedBranchId) !== String(currentUser.branchId))) {
+        const effectiveRole = role !== undefined ? role : currentUser.role;
+
+        if (currentUser.role === 'manager' && (parsedBranchId === null || String(parsedBranchId) !== String(currentUser.branchId) || effectiveRole !== 'manager')) {
             await db.collection('branches').updateMany(
                 { manager: new ObjectId(id) },
                 { $set: { manager: null, updatedAt: new Date() } }
             );
         }
 
-        if (currentUser.role === 'manager' && parsedBranchId && String(parsedBranchId) !== String(currentUser.branchId)) {
+        if (effectiveRole === 'manager' && parsedBranchId && String(parsedBranchId) !== String(currentUser.branchId)) {
             await db.collection('branches').updateOne(
                 { _id: parsedBranchId },
                 { $set: { manager: new ObjectId(id), updatedAt: new Date() } }
@@ -174,6 +196,7 @@ const updateUser = async (req, res) => {
 const updateUserRole = async (req, res) => {
     try {
         const db = getDB();
+        const actorRole = req.sessionUser?.role;
         const { id } = req.params;
 
         if (!ObjectId.isValid(id)) {
@@ -185,11 +208,21 @@ const updateUserRole = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found.' });
         }
 
+        if (hierarchyGuard(res, actorRole, currentUser.role, 'change the role of')) return;
+
         const { role, updatedBy } = req.body;
 
-        const updates = {
-            updatedAt: new Date()
-        };
+        if (role && hierarchyGuard(res, actorRole, role, 'assign the role')) return;
+
+        const allowed = assignableRoles(actorRole);
+        if (role && !allowed.includes(role)) {
+            return res.status(403).json({
+                success: false,
+                message: `You are not permitted to assign the role "${role}".`
+            });
+        }
+
+        const updates = { updatedAt: new Date() };
         if (role !== undefined) updates.role = role;
         if (updatedBy !== undefined) updates.updatedBy = updatedBy;
 
@@ -224,6 +257,7 @@ const updateUserRole = async (req, res) => {
 const deleteUser = async (req, res) => {
     try {
         const db = getDB();
+        const actorRole = req.sessionUser?.role;
         const { id } = req.params;
         const { deletedBy } = req.body;
 
@@ -235,6 +269,8 @@ const deleteUser = async (req, res) => {
         if (!userToDelete) {
             return res.status(404).json({ success: false, message: 'User not found.' });
         }
+
+        if (hierarchyGuard(res, actorRole, userToDelete.role, 'delete')) return;
 
         const deletedRecord = {
             ...userToDelete,
