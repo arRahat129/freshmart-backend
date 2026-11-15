@@ -45,8 +45,10 @@ const createMainProduct = async (req, res) => {
                 productId,
                 productSku: sku,
                 variantSku: v.variantSku,
-                size: v.size,
-                color: v.color,
+                attributes: Array.isArray(v.attributes) ? v.attributes.map(attr => ({
+                    attributeType: attr.attributeType || '',
+                    attributeValue: attr.attributeValue || ''
+                })) : [],
                 pricePerPiece: Number(v.pricePerPiece),
                 variantStock: Number(v.variantStock),
                 isVariantDepleted: Number(v.variantStock) === 0,
@@ -175,8 +177,10 @@ const updateMainProduct = async (req, res) => {
                     productId: new ObjectId(id),
                     productSku: existingProduct.sku,
                     variantSku: v.variantSku,
-                    size: v.size,
-                    color: v.color,
+                    attributes: Array.isArray(v.attributes) ? v.attributes.map(attr => ({
+                        attributeType: attr.attributeType || '',
+                        attributeValue: attr.attributeValue || ''
+                    })) : [],
                     pricePerPiece: Number(v.pricePerPiece),
                     variantStock: Number(v.variantStock),
                     isVariantDepleted: Number(v.variantStock) === 0,

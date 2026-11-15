@@ -3,46 +3,85 @@ const { getDB } = require('../config/db');
 
 const FALLBACK_IMAGE_URL = "https://i.ibb.co.com/JwgTBWgB/freshmart-logo.jpg";
 
-// ==========================================
-// 1. STANDARD MAIN-STOCK DEMANDS & RETURNS
-// ==========================================
-
 const requestBranchStock = async (req, res) => {
     try {
         const db = getDB();
-        const { branchId, branchSkuPrefix, productId, requestedVariants, requestedBy, managerNote } = req.body;
+        const { productId, requestedVariants, managerId, managerName, managerEmail, employeeId, managerNote } = req.body;
+
+        const parsedManagerId = managerId && ObjectId.isValid(managerId) ? new ObjectId(managerId) : null;
+        const parsedProductId = productId && ObjectId.isValid(productId) ? new ObjectId(productId) : null;
+
+        if (!parsedManagerId) {
+            return res.status(400).json({ success: false, message: 'Invalid or missing manager ID.' });
+        }
+
+        if (!parsedProductId) {
+            return res.status(400).json({ success: false, message: 'Invalid or missing product ID.' });
+        }
+
+        const userDoc = await db.collection('users').findOne({ _id: parsedManagerId });
+        const resolvedBranchId = userDoc?.branchId || userDoc?.branchID;
+
+        if (!userDoc || !resolvedBranchId) {
+            return res.status(400).json({ success: false, message: 'Manager is not assigned to any branch.' });
+        }
+
+        const branchDoc = await db.collection('branches').findOne({ _id: resolvedBranchId });
+        const resolvedBranchName = branchDoc ? branchDoc.name : '';
+
+        const productDoc = await db.collection('main_products').findOne({ _id: parsedProductId });
+        const resolvedProductName = productDoc ? (productDoc.name || productDoc.title) : 'Main Warehouse Product';
 
         if (!requestedVariants || !Array.isArray(requestedVariants) || requestedVariants.length === 0) {
             return res.status(400).json({ success: false, message: 'Requested variants array cannot be empty.' });
         }
 
+        const validatedVariants = [];
+
         for (const item of requestedVariants) {
+            const quantity = Number(item.quantity || 0);
+            if (quantity <= 0) continue;
+
             const variantDoc = await db.collection('product_variants').findOne({
-                productId: new ObjectId(productId),
+                productId: parsedProductId,
                 variantSku: item.variantSku
             });
 
-            if (!variantDoc || variantDoc.variantStock < Number(item.quantity)) {
+            if (!variantDoc || variantDoc.variantStock < quantity) {
                 return res.status(400).json({
                     success: false,
                     message: `Insufficient main stock for variant SKU: ${item.variantSku}`
                 });
             }
+
+            const attributes = variantDoc.attributes || [];
+            const sizeAttr = attributes.find(a => a.attributeType?.toLowerCase().includes('size'));
+            const colorAttr = attributes.find(a => a.attributeType?.toLowerCase().includes('color'));
+
+            validatedVariants.push({
+                variantSku: variantDoc.variantSku,
+                attributes,
+                size: sizeAttr ? sizeAttr.attributeValue : (item.size || 'Standard'),
+                color: colorAttr ? colorAttr.attributeValue : (item.color || 'Default'),
+                quantity
+            });
+        }
+
+        if (validatedVariants.length === 0) {
+            return res.status(400).json({ success: false, message: 'Please specify a quantity for at least one variant.' });
         }
 
         const newDemand = {
-            branchId: ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId,
-            branchSkuPrefix: branchSkuPrefix || 'BR',
-            productId: new ObjectId(productId),
-            requestedVariants: requestedVariants.map(v => ({
-                variantSku: v.variantSku,
-                branchVariantSku: v.branchVariantSku || `${branchSkuPrefix || 'BR'}-${v.variantSku}`,
-                size: v.size,
-                color: v.color,
-                quantity: Number(v.quantity)
-            })),
+            branchId: resolvedBranchId,
+            branchName: resolvedBranchName,
+            productId: parsedProductId,
+            productName: resolvedProductName,
+            requestedVariants: validatedVariants,
             status: 'Pending',
-            requestedBy: requestedBy || 'Manager',
+            managerId: parsedManagerId,
+            requestedBy: managerName || userDoc.name || 'Manager',
+            managerEmail: managerEmail || userDoc.email || '',
+            employeeId: employeeId || userDoc.employeeId || '',
             managerNote: managerNote || '',
             reviewedBy: null,
             adminNote: '',
@@ -61,8 +100,15 @@ const getAllBranchStockDemands = async (req, res) => {
     try {
         const db = getDB();
         const { branchId } = req.query;
-        const query = branchId ? { branchId: ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId } : {};
+        const query = branchId && ObjectId.isValid(branchId) ? { branchId: new ObjectId(branchId) } : {};
         const demands = await db.collection('branch_stock_demands').find(query).toArray();
+
+        for (let demand of demands) {
+            if (!demand.productName && demand.productId) {
+                const product = await db.collection('main_products').findOne({ _id: demand.productId });
+                demand.productName = product ? (product.name || product.title) : 'Main Warehouse Product';
+            }
+        }
 
         return res.status(200).json({ success: true, data: demands });
     } catch (error) {
@@ -82,6 +128,11 @@ const getBranchStockDemandById = async (req, res) => {
         const demand = await db.collection('branch_stock_demands').findOne({ _id: new ObjectId(demandId) });
         if (!demand) {
             return res.status(404).json({ success: false, message: 'Stock demand request not found.' });
+        }
+
+        if (!demand.productName && demand.productId) {
+            const product = await db.collection('main_products').findOne({ _id: demand.productId });
+            demand.productName = product ? (product.name || product.title) : 'Main Warehouse Product';
         }
 
         return res.status(200).json({ success: true, data: demand });
@@ -117,27 +168,41 @@ const updateBranchStockDemand = async (req, res) => {
         if (managerNote !== undefined) updateFields.managerNote = managerNote;
 
         if (requestedVariants && Array.isArray(requestedVariants)) {
+            const validatedVariants = [];
             for (const item of requestedVariants) {
+                const quantity = Number(item.quantity || 0);
+                if (quantity <= 0) continue;
+
                 const variantDoc = await db.collection('product_variants').findOne({
                     productId: existingDemand.productId,
                     variantSku: item.variantSku
                 });
 
-                if (!variantDoc || variantDoc.variantStock < Number(item.quantity)) {
+                if (!variantDoc || variantDoc.variantStock < quantity) {
                     return res.status(400).json({
                         success: false,
                         message: `Insufficient main stock for variant SKU: ${item.variantSku}`
                     });
                 }
+
+                const attributes = variantDoc.attributes || [];
+                const sizeAttr = attributes.find(a => a.attributeType?.toLowerCase().includes('size'));
+                const colorAttr = attributes.find(a => a.attributeType?.toLowerCase().includes('color'));
+
+                validatedVariants.push({
+                    variantSku: variantDoc.variantSku,
+                    attributes,
+                    size: sizeAttr ? sizeAttr.attributeValue : (item.size || 'Standard'),
+                    color: colorAttr ? colorAttr.attributeValue : (item.color || 'Default'),
+                    quantity
+                });
             }
 
-            updateFields.requestedVariants = requestedVariants.map(v => ({
-                variantSku: v.variantSku,
-                branchVariantSku: v.branchVariantSku || `${existingDemand.branchSkuPrefix}-${v.variantSku}`,
-                size: v.size,
-                color: v.color,
-                quantity: Number(v.quantity)
-            }));
+            if (validatedVariants.length === 0) {
+                return res.status(400).json({ success: false, message: 'Please specify a quantity for at least one variant.' });
+            }
+
+            updateFields.requestedVariants = validatedVariants;
         }
 
         await db.collection('branch_stock_demands').updateOne({ _id: new ObjectId(demandId) }, { $set: updateFields });
@@ -229,7 +294,12 @@ const reviewStockDemand = async (req, res) => {
                     { branchId: demand.branchId, productId: demand.productId, variantSku: item.variantSku },
                     {
                         $inc: { stock: item.quantity },
-                        $set: { size: item.size, color: item.color, branchVariantSku: item.branchVariantSku, updatedAt: new Date() }
+                        $set: {
+                            branchName: demand.branchName || '',
+                            size: item.size,
+                            color: item.color,
+                            updatedAt: new Date()
+                        }
                     },
                     { upsert: true }
                 );
@@ -263,6 +333,13 @@ const returnStockToMain = async (req, res) => {
         const db = getDB();
         const { branchId, productId, returnVariants, returnedBy, returnReason } = req.body;
 
+        const parsedBranchId = branchId && ObjectId.isValid(branchId) ? new ObjectId(branchId) : null;
+        const parsedProductId = productId && ObjectId.isValid(productId) ? new ObjectId(productId) : null;
+
+        if (!parsedBranchId || !parsedProductId) {
+            return res.status(400).json({ success: false, message: 'Invalid Branch ID or Product ID.' });
+        }
+
         if (!returnVariants || !Array.isArray(returnVariants) || returnVariants.length === 0) {
             return res.status(400).json({ success: false, message: 'Return variants array cannot be empty.' });
         }
@@ -271,8 +348,8 @@ const returnStockToMain = async (req, res) => {
 
         for (const item of returnVariants) {
             const branchInv = await db.collection('branch_inventories').findOne({
-                branchId: ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId,
-                productId: new ObjectId(productId),
+                branchId: parsedBranchId,
+                productId: parsedProductId,
                 variantSku: item.variantSku
             });
 
@@ -286,27 +363,24 @@ const returnStockToMain = async (req, res) => {
             totalItemsReturned += Number(item.quantity);
 
             await db.collection('branch_inventories').updateOne(
-                { branchId: ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId, productId: new ObjectId(productId), variantSku: item.variantSku },
+                { branchId: parsedBranchId, productId: parsedProductId, variantSku: item.variantSku },
                 { $inc: { stock: -Number(item.quantity) }, $set: { updatedAt: new Date() } }
             );
 
             await db.collection('product_variants').updateOne(
-                { productId: new ObjectId(productId), variantSku: item.variantSku },
+                { productId: parsedProductId, variantSku: item.variantSku },
                 { $inc: { variantStock: Number(item.quantity) }, $set: { isVariantDepleted: false, updatedAt: new Date() } }
             );
         }
 
-        const mainProductDoc = await db.collection('main_products').findOne({ _id: new ObjectId(productId) });
-        const restoredTotalStock = (mainProductDoc ? mainProductDoc.totalStock : 0) + totalItemsReturned;
-
         await db.collection('main_products').updateOne(
-            { _id: new ObjectId(productId) },
+            { _id: parsedProductId },
             { $inc: { totalStock: totalItemsReturned }, $set: { isStockDepleted: false, updatedAt: new Date() } }
         );
 
         await db.collection('stock_return_logs').insertOne({
-            branchId: ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId,
-            productId: new ObjectId(productId),
+            branchId: parsedBranchId,
+            productId: parsedProductId,
             returnVariants,
             returnedBy: returnedBy || 'Manager',
             returnReason: returnReason || '',
@@ -319,18 +393,26 @@ const returnStockToMain = async (req, res) => {
     }
 };
 
-// ==========================================
-// 2. CUSTOM EXCLUSIVE BRANCH PRODUCT REQUESTS
-// ==========================================
-
 const requestBranchCustomProduct = async (req, res) => {
     try {
         const db = getDB();
-        const { branchId, managerId, branchSkuPrefix, productName, categoryId, description, images, variants, managerNote } = req.body;
+        const { managerId, managerName, managerEmail, employeeId, productName, categoryId, description, images, variants, managerNote } = req.body;
 
-        if (!branchId || !managerId) {
-            return res.status(400).json({ success: false, message: 'Branch ID and Manager ID are required.' });
+        const parsedManagerId = managerId && ObjectId.isValid(managerId) ? new ObjectId(managerId) : null;
+
+        if (!parsedManagerId) {
+            return res.status(400).json({ success: false, message: 'Valid Manager ID is required.' });
         }
+
+        const userDoc = await db.collection('users').findOne({ _id: parsedManagerId });
+        const resolvedBranchId = userDoc?.branchId || userDoc?.branchID;
+
+        if (!userDoc || !resolvedBranchId) {
+            return res.status(400).json({ success: false, message: 'Manager is not assigned to any branch.' });
+        }
+
+        const branchDoc = await db.collection('branches').findOne({ _id: resolvedBranchId });
+        const resolvedBranchName = branchDoc ? branchDoc.name : '';
 
         if (!variants || !Array.isArray(variants) || variants.length === 0) {
             return res.status(400).json({ success: false, message: 'At least one variant must be specified.' });
@@ -339,19 +421,21 @@ const requestBranchCustomProduct = async (req, res) => {
         const productImages = (images && Array.isArray(images) && images.length > 0) ? images : [FALLBACK_IMAGE_URL];
 
         const newRequest = {
-            branchId: ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId,
-            managerId: ObjectId.isValid(managerId) ? new ObjectId(managerId) : managerId,
-            branchSkuPrefix: branchSkuPrefix || 'BR-EX',
+            branchId: resolvedBranchId,
+            branchName: resolvedBranchName,
+            managerId: parsedManagerId,
+            managerName: managerName || userDoc.name || 'Manager',
+            managerEmail: managerEmail || userDoc.email || '',
+            employeeId: employeeId || userDoc.employeeId || '',
             productName,
             categoryId: categoryId && ObjectId.isValid(categoryId) ? new ObjectId(categoryId) : null,
             description: description || '',
             images: productImages,
             variants: variants.map(v => ({
                 variantSku: v.variantSku,
-                branchVariantSku: v.branchVariantSku || `${branchSkuPrefix || 'BR-EX'}-${v.variantSku}`,
                 size: v.size || 'Standard',
                 color: v.color || 'Default',
-                requestedStock: Number(v.requestedStock || 0),
+                requestedStock: Number(v.requestedStock || v.quantity || 0),
                 pricePerPiece: Number(v.pricePerPiece || 0),
                 costPrice: Number(v.costPrice || 0)
             })),
@@ -375,7 +459,7 @@ const getAllBranchCustomProductRequests = async (req, res) => {
         const db = getDB();
         const { branchId, status } = req.query;
         const query = {};
-        if (branchId) query.branchId = ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId;
+        if (branchId && ObjectId.isValid(branchId)) query.branchId = new ObjectId(branchId);
         if (status) query.status = status;
 
         const requests = await db.collection('branch_custom_product_requests').find(query).sort({ createdAt: -1 }).toArray();
@@ -432,13 +516,13 @@ const reviewBranchCustomProductRequest = async (req, res) => {
             for (const item of requestDoc.variants) {
                 const explicitProductData = {
                     branchId: requestDoc.branchId,
+                    branchName: requestDoc.branchName || '',
                     managerId: requestDoc.managerId,
                     productName: requestDoc.productName,
                     categoryId: requestDoc.categoryId,
                     description: requestDoc.description,
                     images: requestDoc.images,
                     variantSku: item.variantSku,
-                    branchVariantSku: item.branchVariantSku,
                     size: item.size,
                     color: item.color,
                     stock: item.requestedStock,
@@ -446,12 +530,11 @@ const reviewBranchCustomProductRequest = async (req, res) => {
                     costPrice: item.costPrice,
                     isStockDepleted: item.requestedStock === 0,
                     originRequestId: requestDoc._id,
-                    createdAt: new Date(),
                     updatedAt: new Date()
                 };
 
                 await db.collection('branch_explicit_products').updateOne(
-                    { branchId: requestDoc.branchId, branchVariantSku: item.branchVariantSku },
+                    { branchId: requestDoc.branchId, variantSku: item.variantSku },
                     { $set: explicitProductData, $setOnInsert: { createdAt: new Date() } },
                     { upsert: true }
                 );
@@ -474,14 +557,86 @@ const getBranchExplicitProducts = async (req, res) => {
         const db = getDB();
         const { branchId } = req.params;
 
-        if (!branchId) {
-            return res.status(400).json({ success: false, message: 'Branch ID is required.' });
+        if (!branchId || !ObjectId.isValid(branchId)) {
+            return res.status(400).json({ success: false, message: 'Valid Branch ID is required.' });
         }
 
-        const queryBranchId = ObjectId.isValid(branchId) ? new ObjectId(branchId) : branchId;
-        const products = await db.collection('branch_explicit_products').find({ branchId: queryBranchId }).toArray();
+        const products = await db.collection('branch_explicit_products').find({ branchId: new ObjectId(branchId) }).toArray();
 
         return res.status(200).json({ success: true, data: products });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const updateBranchCustomProductRequest = async (req, res) => {
+    try {
+        const db = getDB();
+        const { requestId } = req.params;
+        const { productName, categoryId, description, images, variants, managerNote } = req.body;
+
+        if (!ObjectId.isValid(requestId)) {
+            return res.status(400).json({ success: false, message: 'Invalid request ID.' });
+        }
+
+        const existingRequest = await db.collection('branch_custom_product_requests').findOne({ _id: new ObjectId(requestId) });
+        if (!existingRequest) {
+            return res.status(404).json({ success: false, message: 'Custom product request not found.' });
+        }
+
+        if (existingRequest.status !== 'Pending') {
+            return res.status(400).json({ success: false, message: 'Cannot edit a request that has already been reviewed.' });
+        }
+
+        const updateFields = { updatedAt: new Date() };
+        if (productName !== undefined) updateFields.productName = productName;
+        if (categoryId !== undefined) updateFields.categoryId = categoryId && ObjectId.isValid(categoryId) ? new ObjectId(categoryId) : null;
+        if (description !== undefined) updateFields.description = description;
+        if (managerNote !== undefined) updateFields.managerNote = managerNote;
+        if (images !== undefined && Array.isArray(images)) {
+            updateFields.images = images.length > 0 ? images : existingRequest.images;
+        }
+        if (variants && Array.isArray(variants)) {
+            updateFields.variants = variants.map(v => ({
+                variantSku: v.variantSku,
+                size: v.size || 'Standard',
+                color: v.color || 'Default',
+                requestedStock: Number(v.requestedStock || v.quantity || 0),
+                pricePerPiece: Number(v.pricePerPiece || 0),
+                costPrice: Number(v.costPrice || 0)
+            }));
+        }
+
+        await db.collection('branch_custom_product_requests').updateOne({ _id: new ObjectId(requestId) }, { $set: updateFields });
+        const updatedDoc = await db.collection('branch_custom_product_requests').findOne({ _id: new ObjectId(requestId) });
+
+        return res.status(200).json({ success: true, message: 'Custom product request updated successfully.', data: updatedDoc });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const deleteBranchCustomProductRequest = async (req, res) => {
+    try {
+        const db = getDB();
+        const { requestId } = req.params;
+
+        if (!ObjectId.isValid(requestId)) {
+            return res.status(400).json({ success: false, message: 'Invalid request ID.' });
+        }
+
+        const requestDoc = await db.collection('branch_custom_product_requests').findOne({ _id: new ObjectId(requestId) });
+        if (!requestDoc) {
+            return res.status(404).json({ success: false, message: 'Custom product request not found.' });
+        }
+
+        if (requestDoc.status !== 'Pending') {
+            return res.status(400).json({ success: false, message: 'Cannot delete a request that has already been processed.' });
+        }
+
+        await db.collection('branch_custom_product_requests').deleteOne({ _id: new ObjectId(requestId) });
+
+        return res.status(200).json({ success: true, message: 'Custom product request deleted successfully.' });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -499,5 +654,7 @@ module.exports = {
     getAllBranchCustomProductRequests,
     getBranchCustomProductRequestById,
     reviewBranchCustomProductRequest,
-    getBranchExplicitProducts
+    getBranchExplicitProducts,
+    updateBranchCustomProductRequest,
+    deleteBranchCustomProductRequest
 };

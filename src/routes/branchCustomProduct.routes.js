@@ -12,12 +12,13 @@ const {
     getAllBranchCustomProductRequests,
     getBranchCustomProductRequestById,
     reviewBranchCustomProductRequest,
-    getBranchExplicitProducts
+    getBranchExplicitProducts,
+    updateBranchCustomProductRequest,
+    deleteBranchCustomProductRequest
 } = require('../controllers/branchCustomProduct.controller');
 
-// --- A. Standard Main-Stock Demands & Returns ---
 router.post('/demand', requestBranchStock);
-router.get('/demand', getAllBranchCustomProductRequests ? getAllBranchStockDemands : getAllBranchStockDemands); // Falls back cleanly
+router.get('/demand', getAllBranchCustomProductRequests ? getAllBranchStockDemands : getAllBranchStockDemands);
 router.get('/demand/:demandId', getBranchStockDemandById);
 router.put('/demand/:demandId', updateBranchStockDemand);
 router.delete('/demand/:demandId', deleteBranchStockDemand);
@@ -25,13 +26,13 @@ router.patch('/demand/:demandId/review', reviewStockDemand);
 
 router.post('/return', returnStockToMain);
 
-// --- B. Custom Exclusive Branch Product Requests ---
 router.post('/requests', requestBranchCustomProduct);
 router.get('/requests', getAllBranchCustomProductRequests);
 router.get('/requests/:requestId', getBranchCustomProductRequestById);
 router.patch('/requests/:requestId/review', reviewBranchCustomProductRequest);
+router.put('/requests/:requestId', updateBranchCustomProductRequest);
+router.delete('/requests/:requestId', deleteBranchCustomProductRequest);
 
-// --- C. Branch Explicit Inventory Catalog ---
 router.get('/inventory/:branchId', getBranchExplicitProducts);
 
 module.exports = router;
