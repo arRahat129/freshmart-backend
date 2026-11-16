@@ -8,13 +8,18 @@ const {
     getAllVariantAttributes,
     deleteVariantAttribute
 } = require('../controllers/categoryVariant.controller');
+const { populateSession, requireCatalogAccess } = require('../middleware/requireAuth');
 
-router.post('/categories', createCategory);
+router.use(populateSession);
+
 router.get('/categories', getAllCategories);
-router.delete('/categories/:id', deleteCategory);
 
-router.post('/attributes', createVariantAttribute);
+router.post('/categories', requireCatalogAccess, createCategory);
+router.delete('/categories/:id', requireCatalogAccess, deleteCategory);
+
 router.get('/attributes', getAllVariantAttributes);
-router.delete('/attributes/:id', deleteVariantAttribute);
+
+router.post('/attributes', requireCatalogAccess, createVariantAttribute);
+router.delete('/attributes/:id', requireCatalogAccess, deleteVariantAttribute);
 
 module.exports = router;

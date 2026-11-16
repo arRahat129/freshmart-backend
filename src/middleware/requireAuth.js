@@ -1,6 +1,10 @@
 const { getAuth } = require('../lib/auth');
 const { READ_ROLES, CUD_ROLES } = require('../lib/roleHierarchy');
 
+const MANAGER_ROLES = new Set(['manager']);
+
+const CATALOG_ADMIN_ROLES = new Set(['owner', 'superadmin', 'admin']);
+
 const populateSession = async (req, res, next) => {
     try {
         const auth = getAuth();
@@ -34,4 +38,32 @@ const requireCUDAccess = (req, res, next) => {
     next();
 };
 
-module.exports = { populateSession, requireReadAccess, requireCUDAccess };
+const requireManagerAccess = (req, res, next) => {
+    const role = req.sessionUser?.role;
+    if (!role || !MANAGER_ROLES.has(role)) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Only branch managers can perform this action.'
+        });
+    }
+    next();
+};
+
+const requireCatalogAccess = (req, res, next) => {
+    const role = req.sessionUser?.role;
+    if (!role || !CATALOG_ADMIN_ROLES.has(role)) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Only owner, superadmin, and admin can modify the catalog.'
+        });
+    }
+    next();
+};
+
+module.exports = {
+    populateSession,
+    requireReadAccess,
+    requireCUDAccess,
+    requireManagerAccess,
+    requireCatalogAccess
+};

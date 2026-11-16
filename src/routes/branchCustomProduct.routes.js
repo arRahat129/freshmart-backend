@@ -16,22 +16,29 @@ const {
     updateBranchCustomProductRequest,
     deleteBranchCustomProductRequest
 } = require('../controllers/branchCustomProduct.controller');
+const { populateSession, requireManagerAccess } = require('../middleware/requireAuth');
 
-router.post('/demand', requestBranchStock);
-router.get('/demand', getAllBranchCustomProductRequests ? getAllBranchStockDemands : getAllBranchStockDemands);
+router.use(populateSession);
+
+router.get('/demand', getAllBranchStockDemands);
 router.get('/demand/:demandId', getBranchStockDemandById);
-router.put('/demand/:demandId', updateBranchStockDemand);
-router.delete('/demand/:demandId', deleteBranchStockDemand);
+
+router.post('/demand', requireManagerAccess, requestBranchStock);
+router.put('/demand/:demandId', requireManagerAccess, updateBranchStockDemand);
+router.delete('/demand/:demandId', requireManagerAccess, deleteBranchStockDemand);
+
 router.patch('/demand/:demandId/review', reviewStockDemand);
 
-router.post('/return', returnStockToMain);
+router.post('/return', requireManagerAccess, returnStockToMain);
 
-router.post('/requests', requestBranchCustomProduct);
 router.get('/requests', getAllBranchCustomProductRequests);
 router.get('/requests/:requestId', getBranchCustomProductRequestById);
+
+router.post('/requests', requireManagerAccess, requestBranchCustomProduct);
+router.put('/requests/:requestId', requireManagerAccess, updateBranchCustomProductRequest);
+router.delete('/requests/:requestId', requireManagerAccess, deleteBranchCustomProductRequest);
+
 router.patch('/requests/:requestId/review', reviewBranchCustomProductRequest);
-router.put('/requests/:requestId', updateBranchCustomProductRequest);
-router.delete('/requests/:requestId', deleteBranchCustomProductRequest);
 
 router.get('/inventory/:branchId', getBranchExplicitProducts);
 

@@ -7,11 +7,15 @@ const {
     updateMainProduct,
     deleteMainProduct
 } = require('../controllers/product.controller');
+const { populateSession, requireCatalogAccess } = require('../middleware/requireAuth');
 
-router.post('/main', createMainProduct);
+router.use(populateSession);
+
 router.get('/main', getAllMainProducts);
 router.get('/main/:id', getMainProductById);
-router.put('/main/:id', updateMainProduct);
-router.delete('/main/:id', deleteMainProduct);
+
+router.post('/main', requireCatalogAccess, createMainProduct);
+router.put('/main/:id', requireCatalogAccess, updateMainProduct);
+router.delete('/main/:id', requireCatalogAccess, deleteMainProduct);
 
 module.exports = router;
