@@ -30,7 +30,14 @@ const requestBranchStock = async (req, res) => {
         const resolvedBranchName = branchDoc ? branchDoc.name : '';
 
         const productDoc = await db.collection('main_products').findOne({ _id: parsedProductId });
-        const resolvedProductName = productDoc ? (productDoc.name || productDoc.title) : 'Main Warehouse Product';
+        if (!productDoc) {
+            return res.status(404).json({ success: false, message: 'Main product not found.' });
+        }
+
+        const resolvedProductName = productDoc.name || productDoc.title || 'Main Warehouse Product';
+        const resolvedProductImages = (Array.isArray(productDoc.images) && productDoc.images.length > 0)
+            ? productDoc.images
+            : [FALLBACK_IMAGE_URL];
 
         if (!requestedVariants || !Array.isArray(requestedVariants) || requestedVariants.length === 0) {
             return res.status(400).json({ success: false, message: 'Requested variants array cannot be empty.' });
@@ -76,6 +83,7 @@ const requestBranchStock = async (req, res) => {
             branchName: resolvedBranchName,
             productId: parsedProductId,
             productName: resolvedProductName,
+            images: resolvedProductImages,
             requestedVariants: validatedVariants,
             status: 'Pending',
             managerId: parsedManagerId,
@@ -84,13 +92,18 @@ const requestBranchStock = async (req, res) => {
             employeeId: employeeId || userDoc.employeeId || '',
             managerNote: managerNote || '',
             reviewedBy: null,
+            reviewedByName: '',
             adminNote: '',
             createdAt: new Date(),
             updatedAt: new Date()
         };
 
         const result = await db.collection('branch_stock_demands').insertOne(newDemand);
-        return res.status(201).json({ success: true, message: 'Stock demand request submitted successfully.', data: { demandId: result.insertedId, ...newDemand } });
+        return res.status(201).json({
+            success: true,
+            message: 'Stock demand request submitted successfully.',
+            data: { demandId: result.insertedId, ...newDemand }
+        });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
@@ -101,12 +114,19 @@ const getAllBranchStockDemands = async (req, res) => {
         const db = getDB();
         const { branchId } = req.query;
         const query = branchId && ObjectId.isValid(branchId) ? { branchId: new ObjectId(branchId) } : {};
-        const demands = await db.collection('branch_stock_demands').find(query).toArray();
+        const demands = await db.collection('branch_stock_demands').find(query).sort({ createdAt: -1 }).toArray();
 
         for (let demand of demands) {
-            if (!demand.productName && demand.productId) {
+            if ((!demand.productName || !Array.isArray(demand.images) || demand.images.length === 0) && demand.productId) {
                 const product = await db.collection('main_products').findOne({ _id: demand.productId });
-                demand.productName = product ? (product.name || product.title) : 'Main Warehouse Product';
+                if (!demand.productName) {
+                    demand.productName = product ? (product.name || product.title) : 'Main Warehouse Product';
+                }
+                if (!Array.isArray(demand.images) || demand.images.length === 0) {
+                    demand.images = (product && Array.isArray(product.images) && product.images.length > 0)
+                        ? product.images
+                        : [FALLBACK_IMAGE_URL];
+                }
             }
         }
 
@@ -130,9 +150,16 @@ const getBranchStockDemandById = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Stock demand request not found.' });
         }
 
-        if (!demand.productName && demand.productId) {
+        if ((!demand.productName || !Array.isArray(demand.images) || demand.images.length === 0) && demand.productId) {
             const product = await db.collection('main_products').findOne({ _id: demand.productId });
-            demand.productName = product ? (product.name || product.title) : 'Main Warehouse Product';
+            if (!demand.productName) {
+                demand.productName = product ? (product.name || product.title) : 'Main Warehouse Product';
+            }
+            if (!Array.isArray(demand.images) || demand.images.length === 0) {
+                demand.images = (product && Array.isArray(product.images) && product.images.length > 0)
+                    ? product.images
+                    : [FALLBACK_IMAGE_URL];
+            }
         }
 
         return res.status(200).json({ success: true, data: demand });
@@ -218,6 +245,7 @@ const deleteBranchStockDemand = async (req, res) => {
     try {
         const db = getDB();
         const { demandId } = req.params;
+        const { reviewedBy, reviewedByName, adminNote, isAdminDelete } = req.body || {};
 
         if (!ObjectId.isValid(demandId)) {
             return res.status(400).json({ success: false, message: 'Invalid demand ID.' });
@@ -228,8 +256,41 @@ const deleteBranchStockDemand = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Stock demand request not found.' });
         }
 
-        if (demand.status !== 'Pending') {
-            return res.status(400).json({ success: false, message: 'Cannot delete a demand request that has already been processed.' });
+        let resolvedBranchName = demand.branchName;
+        if (!resolvedBranchName && demand.branchId) {
+            const branchDoc = await db.collection('branches').findOne({ _id: demand.branchId });
+            resolvedBranchName = branchDoc ? branchDoc.name : '';
+        }
+
+        let resolvedProductName = demand.productName;
+        if (!resolvedProductName && demand.productId) {
+            const prodDoc = await db.collection('main_products').findOne({ _id: demand.productId });
+            resolvedProductName = prodDoc ? (prodDoc.name || prodDoc.title) : 'Warehouse Product';
+        }
+
+        if (demand.status === 'Pending' && isAdminDelete) {
+            if (!adminNote || !adminNote.trim()) {
+                return res.status(400).json({ success: false, message: 'Rejection reason is required to delete a pending request.' });
+            }
+
+            const parsedReviewerId = reviewedBy && ObjectId.isValid(reviewedBy) ? new ObjectId(reviewedBy) : null;
+
+            await db.collection('request_rejections').insertOne({
+                requestId: demand._id,
+                requestType: 'standard',
+                branchId: demand.branchId,
+                branchName: resolvedBranchName,
+                productId: demand.productId,
+                productName: resolvedProductName,
+                requestedVariants: demand.requestedVariants,
+                requestedByManagerId: demand.managerId,
+                requestedByManagerName: demand.requestedBy,
+                rejectedBy: parsedReviewerId,
+                rejectedByName: reviewedByName || 'Admin',
+                reason: adminNote.trim(),
+                deletedImmediately: true,
+                rejectedAt: new Date()
+            });
         }
 
         await db.collection('branch_stock_demands').deleteOne({ _id: new ObjectId(demandId) });
@@ -244,10 +305,14 @@ const reviewStockDemand = async (req, res) => {
     try {
         const db = getDB();
         const { demandId } = req.params;
-        const { status, reviewedBy, adminNote } = req.body;
+        const { status, reviewedBy, reviewedByName, adminNote } = req.body;
 
         if (!['Approved', 'Rejected'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid review status.' });
+        }
+
+        if (!ObjectId.isValid(demandId)) {
+            return res.status(400).json({ success: false, message: 'Invalid demand ID.' });
         }
 
         const demand = await db.collection('branch_stock_demands').findOne({ _id: new ObjectId(demandId) });
@@ -257,6 +322,20 @@ const reviewStockDemand = async (req, res) => {
 
         if (demand.status !== 'Pending') {
             return res.status(400).json({ success: false, message: 'This demand request has already been processed.' });
+        }
+
+        const parsedReviewerId = reviewedBy && ObjectId.isValid(reviewedBy) ? new ObjectId(reviewedBy) : null;
+
+        let resolvedBranchName = demand.branchName;
+        if (!resolvedBranchName && demand.branchId) {
+            const branchDoc = await db.collection('branches').findOne({ _id: demand.branchId });
+            resolvedBranchName = branchDoc ? branchDoc.name : '';
+        }
+
+        let resolvedProductName = demand.productName;
+        if (!resolvedProductName && demand.productId) {
+            const prodDoc = await db.collection('main_products').findOne({ _id: demand.productId });
+            resolvedProductName = prodDoc ? (prodDoc.name || prodDoc.title) : 'Warehouse Product';
         }
 
         if (status === 'Approved') {
@@ -269,13 +348,9 @@ const reviewStockDemand = async (req, res) => {
                 });
 
                 if (!variantDoc || variantDoc.variantStock < item.quantity) {
-                    await db.collection('branch_stock_demands').updateOne(
-                        { _id: new ObjectId(demandId) },
-                        { $set: { status: 'Rejected', reviewedBy: reviewedBy || 'SystemAutoCancel', adminNote: 'Auto-rejected due to insufficient stock conflict.', updatedAt: new Date() } }
-                    );
                     return res.status(400).json({
                         success: false,
-                        message: `Request automatically cancelled and rejected. Insufficient remaining main stock for variant: ${item.variantSku}`
+                        message: `Insufficient remaining main stock for variant: ${item.variantSku}`
                     });
                 }
 
@@ -295,7 +370,7 @@ const reviewStockDemand = async (req, res) => {
                     {
                         $inc: { stock: item.quantity },
                         $set: {
-                            branchName: demand.branchName || '',
+                            branchName: resolvedBranchName,
                             size: item.size,
                             color: item.color,
                             updatedAt: new Date()
@@ -306,7 +381,7 @@ const reviewStockDemand = async (req, res) => {
             }
 
             const mainProductDoc = await db.collection('main_products').findOne({ _id: demand.productId });
-            const newTotalMainStock = mainProductDoc.totalStock - totalItemsMoved;
+            const newTotalMainStock = Math.max(0, (mainProductDoc?.totalStock || 0) - totalItemsMoved);
 
             await db.collection('main_products').updateOne(
                 { _id: demand.productId },
@@ -315,11 +390,42 @@ const reviewStockDemand = async (req, res) => {
                     $set: { isStockDepleted: newTotalMainStock === 0, updatedAt: new Date() }
                 }
             );
+        } else if (status === 'Rejected') {
+            if (!adminNote || !adminNote.trim()) {
+                return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
+            }
+
+            await db.collection('request_rejections').insertOne({
+                requestId: demand._id,
+                requestType: 'standard',
+                branchId: demand.branchId,
+                branchName: resolvedBranchName,
+                productId: demand.productId,
+                productName: resolvedProductName,
+                requestedVariants: demand.requestedVariants,
+                requestedByManagerId: demand.managerId,
+                requestedByManagerName: demand.requestedBy,
+                rejectedBy: parsedReviewerId,
+                rejectedByName: reviewedByName || 'Admin',
+                reason: adminNote.trim(),
+                deletedImmediately: false,
+                rejectedAt: new Date()
+            });
         }
 
         await db.collection('branch_stock_demands').updateOne(
             { _id: new ObjectId(demandId) },
-            { $set: { status, reviewedBy: reviewedBy || 'Admin', adminNote: adminNote || '', updatedAt: new Date() } }
+            {
+                $set: {
+                    status,
+                    reviewedBy: parsedReviewerId,
+                    reviewedByName: reviewedByName || 'Admin',
+                    adminNote: adminNote || '',
+                    branchName: resolvedBranchName,
+                    productName: resolvedProductName,
+                    updatedAt: new Date()
+                }
+            }
         );
 
         return res.status(200).json({ success: true, message: `Stock demand successfully ${status.toLowerCase()}` });
@@ -442,6 +548,7 @@ const requestBranchCustomProduct = async (req, res) => {
             status: 'Pending',
             managerNote: managerNote || '',
             reviewedBy: null,
+            reviewedByName: '',
             adminNote: '',
             createdAt: new Date(),
             updatedAt: new Date()
@@ -493,7 +600,7 @@ const reviewBranchCustomProductRequest = async (req, res) => {
     try {
         const db = getDB();
         const { requestId } = req.params;
-        const { status, reviewedBy, adminNote } = req.body;
+        const { status, reviewedBy, reviewedByName, adminNote } = req.body;
 
         if (!['Approved', 'Rejected'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid review status. Must be Approved or Rejected.' });
@@ -511,6 +618,8 @@ const reviewBranchCustomProductRequest = async (req, res) => {
         if (requestDoc.status !== 'Pending') {
             return res.status(400).json({ success: false, message: 'This request has already been processed.' });
         }
+
+        const parsedReviewerId = reviewedBy && ObjectId.isValid(reviewedBy) ? new ObjectId(reviewedBy) : null;
 
         if (status === 'Approved') {
             for (const item of requestDoc.variants) {
@@ -539,11 +648,39 @@ const reviewBranchCustomProductRequest = async (req, res) => {
                     { upsert: true }
                 );
             }
+        } else if (status === 'Rejected') {
+            if (!adminNote || !adminNote.trim()) {
+                return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
+            }
+
+            await db.collection('request_rejections').insertOne({
+                requestId: requestDoc._id,
+                requestType: 'custom',
+                branchId: requestDoc.branchId,
+                branchName: requestDoc.branchName || '',
+                productName: requestDoc.productName,
+                requestedVariants: requestDoc.variants,
+                requestedByManagerId: requestDoc.managerId,
+                requestedByManagerName: requestDoc.managerName,
+                rejectedBy: parsedReviewerId,
+                rejectedByName: reviewedByName || 'Admin',
+                reason: adminNote.trim(),
+                deletedImmediately: false,
+                rejectedAt: new Date()
+            });
         }
 
         await db.collection('branch_custom_product_requests').updateOne(
             { _id: new ObjectId(requestId) },
-            { $set: { status, reviewedBy: reviewedBy || 'Admin', adminNote: adminNote || '', updatedAt: new Date() } }
+            {
+                $set: {
+                    status,
+                    reviewedBy: parsedReviewerId,
+                    reviewedByName: reviewedByName || 'Admin',
+                    adminNote: adminNote || '',
+                    updatedAt: new Date()
+                }
+            }
         );
 
         return res.status(200).json({ success: true, message: `Custom product request successfully ${status.toLowerCase()}` });
@@ -620,6 +757,7 @@ const deleteBranchCustomProductRequest = async (req, res) => {
     try {
         const db = getDB();
         const { requestId } = req.params;
+        const { reviewedBy, reviewedByName, adminNote, isAdminDelete } = req.body || {};
 
         if (!ObjectId.isValid(requestId)) {
             return res.status(400).json({ success: false, message: 'Invalid request ID.' });
@@ -630,8 +768,34 @@ const deleteBranchCustomProductRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Custom product request not found.' });
         }
 
-        if (requestDoc.status !== 'Pending') {
-            return res.status(400).json({ success: false, message: 'Cannot delete a request that has already been processed.' });
+        let resolvedBranchName = requestDoc.branchName;
+        if (!resolvedBranchName && requestDoc.branchId) {
+            const branchDoc = await db.collection('branches').findOne({ _id: requestDoc.branchId });
+            resolvedBranchName = branchDoc ? branchDoc.name : '';
+        }
+
+        if (requestDoc.status === 'Pending' && isAdminDelete) {
+            if (!adminNote || !adminNote.trim()) {
+                return res.status(400).json({ success: false, message: 'Rejection reason is required to delete a pending request.' });
+            }
+
+            const parsedReviewerId = reviewedBy && ObjectId.isValid(reviewedBy) ? new ObjectId(reviewedBy) : null;
+
+            await db.collection('request_rejections').insertOne({
+                requestId: requestDoc._id,
+                requestType: 'custom',
+                branchId: requestDoc.branchId,
+                branchName: resolvedBranchName,
+                productName: requestDoc.productName,
+                requestedVariants: requestDoc.variants,
+                requestedByManagerId: requestDoc.managerId,
+                requestedByManagerName: requestDoc.managerName,
+                rejectedBy: parsedReviewerId,
+                rejectedByName: reviewedByName || 'Admin',
+                reason: adminNote.trim(),
+                deletedImmediately: true,
+                rejectedAt: new Date()
+            });
         }
 
         await db.collection('branch_custom_product_requests').deleteOne({ _id: new ObjectId(requestId) });
