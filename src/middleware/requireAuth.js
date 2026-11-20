@@ -3,7 +3,11 @@ const { READ_ROLES, CUD_ROLES } = require('../lib/roleHierarchy');
 
 const MANAGER_ROLES = new Set(['manager']);
 
+const CASHIER_ROLES = new Set(['cashier']);
+
 const CATALOG_ADMIN_ROLES = new Set(['owner', 'superadmin', 'admin']);
+
+const RECEIPT_READ_ROLES = new Set(['owner', 'superadmin', 'admin', 'manager', 'cashier']);
 
 const populateSession = async (req, res, next) => {
     try {
@@ -49,6 +53,28 @@ const requireManagerAccess = (req, res, next) => {
     next();
 };
 
+const requireCashierAccess = (req, res, next) => {
+    const role = req.sessionUser?.role;
+    if (!role || !CASHIER_ROLES.has(role)) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Only cashiers can perform checkout operations.'
+        });
+    }
+    next();
+};
+
+const requireReceiptReadAccess = (req, res, next) => {
+    const role = req.sessionUser?.role;
+    if (!role || !RECEIPT_READ_ROLES.has(role)) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Insufficient permissions to view sales receipts.'
+        });
+    }
+    next();
+};
+
 const requireCatalogAccess = (req, res, next) => {
     const role = req.sessionUser?.role;
     if (!role || !CATALOG_ADMIN_ROLES.has(role)) {
@@ -65,5 +91,7 @@ module.exports = {
     requireReadAccess,
     requireCUDAccess,
     requireManagerAccess,
+    requireCashierAccess,
+    requireReceiptReadAccess,
     requireCatalogAccess
 };

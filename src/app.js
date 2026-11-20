@@ -11,6 +11,7 @@ const userRoutes = require('./routes/user.route');
 const productRoutes = require('./routes/product.route');
 const categoryVariantRoutes = require('./routes/categoryVariant.route');
 const branchCustomProductRoutes = require('./routes/branchCustomProduct.routes');
+const checkoutRoutes = require('./routes/checkout.routes');
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use("/api/users", userRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/catalog', categoryVariantRoutes);
 app.use('/api/branch-requests', branchCustomProductRoutes);
+app.use('/api/checkout', checkoutRoutes);
 
 app.get('/', (req, res) => {
     res.send('FreshMart POS Backend is running...');
