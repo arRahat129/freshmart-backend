@@ -24,7 +24,6 @@ const toObjectIdOrNull = (val) => {
     return idStr && ObjectId.isValid(idStr) ? new ObjectId(idStr) : null;
 };
 
-// Reads variant info from a DB document (variantDoc, customDoc, or invDoc)
 const normalizeVariantData = (source = {}) => {
     const rawAttributes =
         Array.isArray(source?.variantAttributes) && source.variantAttributes.length > 0
@@ -94,6 +93,84 @@ const resolveUserBranchId = async (db, sessionUser) => {
         userDoc = await db.collection('users').findOne({ email: String(sessionUser.email).trim() });
     }
     return toObjectIdOrNull(userDoc?.branchId) || toObjectIdOrNull(sessionUser?.branchId);
+};
+
+const buildBranchIdMatchValues = (branchIds = []) => {
+    const values = [];
+    const seen = new Set();
+
+    for (const id of branchIds) {
+        const oid = toObjectIdOrNull(id);
+        if (oid) {
+            const hex = oid.toHexString();
+            if (!seen.has(hex)) {
+                seen.add(hex);
+                values.push(oid, hex);
+            }
+        } else {
+            const str = extractIdString(id);
+            if (str && !seen.has(`raw:${str}`)) {
+                seen.add(`raw:${str}`);
+                values.push(str);
+            }
+        }
+    }
+
+    return values;
+};
+
+const formatManagerInfo = (managerDoc) => {
+    if (!managerDoc) return null;
+    return {
+        _id: managerDoc._id,
+        id: managerDoc.id || (managerDoc._id ? String(managerDoc._id) : ''),
+        name: managerDoc.name || '',
+        email: managerDoc.email || '',
+        image: managerDoc.image || '',
+        role: managerDoc.role || 'manager',
+        branchId: managerDoc.branchId ?? null,
+    };
+};
+
+const fetchBranchManagersMap = async (db, branchIds = []) => {
+    const matchValues = buildBranchIdMatchValues(branchIds);
+    const managerMap = new Map();
+
+    if (matchValues.length === 0) return managerMap;
+
+    const collections = await db.listCollections({}, { nameOnly: true }).toArray();
+    const existing = new Set(collections.map((c) => c.name));
+    const userColName = existing.has('users') ? 'users' : existing.has('user') ? 'user' : 'users';
+
+    const managers = await db
+        .collection(userColName)
+        .find({
+            role: { $regex: /^manager$/i },
+            $or: [
+                { branchId: { $in: matchValues } },
+                { branch: { $in: matchValues } },
+            ],
+        })
+        .project({
+            name: 1,
+            email: 1,
+            image: 1,
+            role: 1,
+            branchId: 1,
+            branch: 1,
+        })
+        .toArray();
+
+    for (const mgr of managers) {
+        const rawBranch = mgr.branchId ?? mgr.branch;
+        const oid = toObjectIdOrNull(rawBranch);
+        const key = oid ? oid.toHexString() : extractIdString(rawBranch);
+        if (key && !managerMap.has(key)) {
+            managerMap.set(key, formatManagerInfo(mgr));
+        }
+    }
+
+    return managerMap;
 };
 
 const searchBranchProductsBySku = async (req, res) => {
@@ -511,25 +588,33 @@ const getReceiptById = async (req, res) => {
 
 const getAllReceipts = async (req, res) => {
     try {
-        const db = getDB();
         const sessionUser = req.sessionUser;
-        const role = String(sessionUser?.role || '').toLowerCase();
-
         if (!sessionUser) {
             return res.status(401).json({ success: false, message: 'Authentication required.' });
         }
 
-        if (!TOP_RECEIPT_ROLES.has(role) && !BRANCH_RECEIPT_ROLES.has(role)) {
+        const role = String(sessionUser?.role || '').toLowerCase();
+        const isTopRole = TOP_RECEIPT_ROLES.has(role);
+        const isBranchRole = BRANCH_RECEIPT_ROLES.has(role);
+
+        if (!isTopRole && !isBranchRole) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied. You do not have permission to view receipts.'
             });
         }
 
-        const { branchId = '' } = req.query;
+        const db = getDB();
         let query = {};
+        let targetBranchIds = [];
 
-        if (BRANCH_RECEIPT_ROLES.has(role)) {
+        if (isTopRole) {
+            const requestedBranchId = toObjectIdOrNull(req.query?.branchId);
+            if (requestedBranchId) {
+                query = { branchId: requestedBranchId };
+                targetBranchIds = [requestedBranchId];
+            }
+        } else {
             const ownBranchId = await resolveUserBranchId(db, sessionUser);
             if (!ownBranchId) {
                 return res.status(403).json({
@@ -538,13 +623,31 @@ const getAllReceipts = async (req, res) => {
                 });
             }
             query = { branchId: ownBranchId };
-        } else {
-            const requestedBranchId = toObjectIdOrNull(branchId);
-            query = requestedBranchId ? { branchId: requestedBranchId } : {};
+            targetBranchIds = [ownBranchId];
         }
 
         const receipts = await db.collection('pos_receipts').find(query).sort({ createdAt: -1 }).toArray();
-        return res.status(200).json({ success: true, data: receipts });
+
+        if (isTopRole && targetBranchIds.length === 0) {
+            targetBranchIds = receipts.map((r) => r.branchId).filter(Boolean);
+        }
+
+        const managerMap = await fetchBranchManagersMap(db, targetBranchIds);
+
+        const enrichedReceipts = receipts.map((receipt) => {
+            const oid = toObjectIdOrNull(receipt.branchId);
+            const key = oid ? oid.toHexString() : extractIdString(receipt.branchId);
+            return {
+                ...receipt,
+                branchManager: key ? (managerMap.get(key) || null) : null
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: enrichedReceipts,
+            branchManagersByBranchId: Object.fromEntries(managerMap.entries())
+        });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
