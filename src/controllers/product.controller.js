@@ -6,7 +6,7 @@ const FALLBACK_IMAGE_URL = "https://i.ibb.co.com/JwgTBWgB/freshmart-logo.jpg";
 const createMainProduct = async (req, res) => {
     try {
         const db = getDB();
-        const { name, categoryId, sku, totalStock, pieceValue, description, images, variants, createdBy } = req.body;
+        const { name, categoryId, sku, totalStock, pieceValue, costPrice, description, images, variants, createdBy } = req.body;
 
         const existingProduct = await db.collection('main_products').findOne({ sku });
         if (existingProduct) {
@@ -28,6 +28,7 @@ const createMainProduct = async (req, res) => {
             sku,
             totalStock: Number(totalStock),
             pieceValue: Number(pieceValue),
+            costPrice: Number(costPrice || 0),
             description: description || '',
             images: productImages,
             lowStockThreshold: Number(req.body.lowStockThreshold || 5),
