@@ -13,17 +13,24 @@ const RECEIPT_READ_ROLES = new Set(['owner', 'superadmin', 'admin', 'manager', '
 
 const populateSession = async (req, res, next) => {
     try {
-        const auth = getAuth();
+        const auth = await getAuth();
         const session = await auth.api.getSession({ headers: req.headers });
         req.sessionUser = session?.user ?? null;
-    } catch {
+        if (req.sessionUser) {
+            req.sessionUser = {
+                ...req.sessionUser,
+                role: String(req.sessionUser.role || '').toLowerCase()
+            };
+        }
+    } catch (err) {
+        console.log('[populateSession] error:', err.message);
         req.sessionUser = null;
     }
     next();
 };
 
 const requireSession = (req, res, next) => {
-    if (!req.sessionUser || !req.sessionData?.token) {
+    if (!req.sessionUser) {
         return res.status(401).json({
             success: false,
             message: 'Authentication required. Please sign in with a valid session.'
@@ -55,7 +62,7 @@ const requireCUDAccess = (req, res, next) => {
 };
 
 const requireTopDashboardAccess = (req, res, next) => {
-    const role = String(req.sessionUser?.role || '').toLowerCase();
+    const role = req.sessionUser?.role;
     if (!role || !TOP_DASHBOARD_ROLES.has(role)) {
         return res.status(403).json({
             success: false,

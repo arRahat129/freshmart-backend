@@ -20,6 +20,16 @@ async function getAuth() {
         trustedOrigins: [
             process.env.FRONTEND_URL || "http://localhost:3000",
         ],
+        advanced: {
+            crossSubdomainCookies: {
+                enabled: false,
+            },
+            defaultCookieAttributes: {
+                sameSite: process.env.NODE_ENV === 'production' ? "none" : "lax",
+                secure: process.env.NODE_ENV === 'production',
+                partitioned: process.env.NODE_ENV === 'production',
+            },
+        },
         emailAndPassword: {
             enabled: true,
         },
