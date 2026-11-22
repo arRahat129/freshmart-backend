@@ -1,13 +1,20 @@
-const { betterAuth } = require("better-auth");
 const dotenv = require('dotenv');
-const { mongodbAdapter } = require("@better-auth/mongo-adapter");
 dotenv.config();
 const { getDB } = require("../config/db");
 
-function getAuth() {
+let cachedAuth = null;
+
+async function getAuth() {
+    if (cachedAuth) return cachedAuth;
+
+    const [{ betterAuth }, { mongodbAdapter }] = await Promise.all([
+        import("better-auth"),
+        import("@better-auth/mongo-adapter"),
+    ]);
+
     const db = getDB();
 
-    return betterAuth({
+    cachedAuth = betterAuth({
         database: mongodbAdapter(db),
         baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
         trustedOrigins: [
@@ -58,6 +65,8 @@ function getAuth() {
             additionalFields: ["employeeId", "role"]
         }
     });
+
+    return cachedAuth;
 }
 
 module.exports = { getAuth };

@@ -22,6 +22,16 @@ const populateSession = async (req, res, next) => {
     next();
 };
 
+const requireSession = (req, res, next) => {
+    if (!req.sessionUser || !req.sessionData?.token) {
+        return res.status(401).json({
+            success: false,
+            message: 'Authentication required. Please sign in with a valid session.'
+        });
+    }
+    next();
+};
+
 const requireReadAccess = (req, res, next) => {
     const role = req.sessionUser?.role;
     if (!role || !READ_ROLES.has(role)) {
@@ -101,6 +111,7 @@ const requireCatalogAccess = (req, res, next) => {
 
 module.exports = {
     populateSession,
+    requireSession,
     requireReadAccess,
     requireCUDAccess,
     requireTopDashboardAccess,

@@ -4,10 +4,9 @@ const cors = require('cors');
 
 dotenv.config();
 
-const { toNodeHandler } = require("better-auth/node");
 const { getAuth } = require('./lib/auth');
 const { connectDB } = require('./config/db');
-const { populateSession } = require('./middleware/requireAuth');
+const { populateSession, requireSession } = require('./middleware/requireAuth');
 const branchRoutes = require('./routes/branch.route');
 const userRoutes = require('./routes/user.route');
 const productRoutes = require('./routes/product.route');
@@ -26,6 +25,10 @@ app.use(cors({
 }));
 app.use(express.json());
 
+app.get('/', (req, res) => {
+    res.send('FreshMart POS Backend is running...');
+});
+
 app.use(async (req, res, next) => {
     try {
         await connectDB();
@@ -36,12 +39,19 @@ app.use(async (req, res, next) => {
     }
 });
 
-app.use("/api/auth", async (req, res) => {
-    const auth = getAuth();
-    return toNodeHandler(auth)(req, res);
+app.use("/api/auth", async (req, res, next) => {
+    try {
+        const { toNodeHandler } = await import("better-auth/node");
+        const auth = await getAuth();
+        return toNodeHandler(auth)(req, res);
+    } catch (err) {
+        console.error("Auth handler error:", err);
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 app.use(populateSession);
+app.use(requireSession);
 
 app.use("/api/branches", branchRoutes);
 app.use("/api/users", userRoutes);
@@ -50,9 +60,5 @@ app.use('/api/catalog', categoryVariantRoutes);
 app.use('/api/branch-requests', branchCustomProductRoutes);
 app.use('/api/checkout', checkoutRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-
-app.get('/', (req, res) => {
-    res.send('FreshMart POS Backend is running...');
-});
 
 module.exports = app;

@@ -1,5 +1,5 @@
 const { ObjectId } = require('mongodb');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const { getDB } = require('../config/db');
 const { getAuth } = require('../lib/auth');
 const { canManage, assignableRoles } = require('../lib/roleHierarchy');
@@ -46,7 +46,7 @@ const createUser = async (req, res) => {
             }
         }
 
-        const auth = getAuth();
+        const auth = await getAuth();
 
         const authResult = await auth.api.signUpEmail({
             body: { email, password, name: name || '' }
