@@ -6,12 +6,14 @@ dotenv.config();
 
 const { toNodeHandler } = require("better-auth/node");
 const { getAuth } = require('./lib/auth');
+const { populateSession } = require('./middleware/requireAuth');
 const branchRoutes = require('./routes/branch.route');
 const userRoutes = require('./routes/user.route');
 const productRoutes = require('./routes/product.route');
 const categoryVariantRoutes = require('./routes/categoryVariant.route');
 const branchCustomProductRoutes = require('./routes/branchCustomProduct.routes');
 const checkoutRoutes = require('./routes/checkout.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
 
 const app = express();
 
@@ -28,12 +30,15 @@ app.use("/api/auth", async (req, res) => {
     return toNodeHandler(auth)(req, res);
 });
 
+app.use(populateSession);
+
 app.use("/api/branches", branchRoutes);
 app.use("/api/users", userRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/catalog', categoryVariantRoutes);
 app.use('/api/branch-requests', branchCustomProductRoutes);
 app.use('/api/checkout', checkoutRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 app.get('/', (req, res) => {
     res.send('FreshMart POS Backend is running...');

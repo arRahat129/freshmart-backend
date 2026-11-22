@@ -1,6 +1,8 @@
 const { getAuth } = require('../lib/auth');
 const { READ_ROLES, CUD_ROLES } = require('../lib/roleHierarchy');
 
+const TOP_DASHBOARD_ROLES = new Set(['owner', 'superadmin', 'admin']);
+
 const MANAGER_ROLES = new Set(['manager']);
 
 const CASHIER_ROLES = new Set(['cashier']);
@@ -37,6 +39,17 @@ const requireCUDAccess = (req, res, next) => {
         return res.status(403).json({
             success: false,
             message: 'Access denied. You do not have permission to perform this action.'
+        });
+    }
+    next();
+};
+
+const requireTopDashboardAccess = (req, res, next) => {
+    const role = String(req.sessionUser?.role || '').toLowerCase();
+    if (!role || !TOP_DASHBOARD_ROLES.has(role)) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Only owner, superadmin, and admin can access executive dashboard stats.'
         });
     }
     next();
@@ -90,6 +103,7 @@ module.exports = {
     populateSession,
     requireReadAccess,
     requireCUDAccess,
+    requireTopDashboardAccess,
     requireManagerAccess,
     requireCashierAccess,
     requireReceiptReadAccess,
