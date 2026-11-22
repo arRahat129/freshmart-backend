@@ -11,5 +11,7 @@ connectDB().then(() => {
         console.log(`Backend server running on port ${PORT}`);
     });
 }).catch((err) => {
-    console.error("Failed to connect to MongoDB Atlas:", err);
+    console.error('Failed to connect to MongoDB Atlas:', err);
 });
+
+module.exports = app;

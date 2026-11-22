@@ -6,6 +6,7 @@ dotenv.config();
 
 const { toNodeHandler } = require("better-auth/node");
 const { getAuth } = require('./lib/auth');
+const { connectDB } = require('./config/db');
 const { populateSession } = require('./middleware/requireAuth');
 const branchRoutes = require('./routes/branch.route');
 const userRoutes = require('./routes/user.route');
@@ -24,6 +25,16 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json());
+
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (err) {
+        console.error('DB connection failed:', err.message);
+        res.status(503).json({ success: false, message: 'Database unavailable. Please try again.' });
+    }
+});
 
 app.use("/api/auth", async (req, res) => {
     const auth = getAuth();
